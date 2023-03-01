@@ -1,0 +1,101 @@
+plugins {
+    id "groovy"
+    id "jacoco"
+    id "org.jenkins-ci.jpi" version "0.45.0"
+}
+
+group = "org.braintree"
+version = "1.0.0"
+
+// jenkins-pipeline-unit 1.15+ requires JDK 11 or later
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(11)
+    }
+}
+
+jenkinsPlugin {
+    jenkinsVersion = '2.346.1'
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://repo.jenkins-ci.org/releases/' }
+}
+
+sourceSets {
+    main {
+        groovy {
+            // srcDirs = ["src/org/braintree"] works but messes up the Jacoco report
+            // this method allows us to see code coverage line-by-line in the Jacoco report
+            srcDirs = ["src"]
+            exclude '**/test/**'
+        }
+    }
+}
+
+dependencies {
+    implementation "com.cloudbees:groovy-cps:1.31"
+    implementation "org.codehaus.groovy:groovy-all:2.4.16"
+
+    // The below are jenkins plugins that provide classes used in this library
+    // because these are Jenkins Plugins they would normally resolve to .jpi or .hpi artifacts
+    // which don't provide the classes we need. We could specify the `@jar` extension as part of the
+    // dependency but that would cause gradle to not resolve transitive dependencies.
+    // To work around this, we use the gradle-jpi-plugin (https://github.com/jenkinsci/gradle-jpi-plugin)
+    // which is intended for Jenkins Plugin development but helps us here to resolve Jenkins Plugins + their
+    // transitive dependencies to .jar rather than the default .hpi & .jpi so we can consume the plugin-provided classes
+    // and avoid compilation errors.
+    implementation "org.jenkins-ci.plugins.workflow:workflow-cps:2759.v87459c4eea_ca_"
+    implementation "org.jenkins-ci.plugins:http_request:1.16"
+    implementation "org.jenkins-ci.plugins:webhook-step:173.vfa_b_93560b_977"
+
+    // These dependencies are provided by a plugin that is built as a part of the braintree/jenkins repo
+    // To re-generate this JAR + pull the latest java-dogstatsd-client:
+    //         Run cd braintree-plugin && mvn clean package
+    //         Copy target/braintree-plugin.jar to the libs/ directory in this repo
+    //         Check braintree-plugin/pom.xml for the latest java-dogstatsd-client version and update here
+    // TODO: Publish the braintree-plugin to some maven repository that we can import normally
+    implementation files("libs/braintree-plugin.jar")
+    implementation "com.datadoghq:java-dogstatsd-client:2.6.1"
+
+    testImplementation "com.lesfurets:jenkins-pipeline-unit:1.16"
+    testImplementation "junit:junit:4.12"
+    testImplementation "org.mockito:mockito-core:3.+"
+}
+
+test {
+    // delete old test reports
+    dependsOn cleanTest
+    finalizedBy jacocoTestReport
+    // don't stop if tests fail
+    ignoreFailures = true
+
+    // minimize logging
+    testLogging.maxGranularity = 0
+
+    // show stdout from tests
+    onOutput { dest, event -> print event.message }
+
+    // show test results
+    def results = []
+    afterTest { desc, result ->
+        println "${desc.className.split("\\.")[-1]}: " +
+            "${desc.name}: ${result.resultType}"
+    }
+    afterSuite { desc, result ->
+       if (desc.className) { results << result }
+    }
+
+    // show summary
+    doLast {
+        println "Tests: ${results.sum { it.testCount }}" +
+            ", Failures: ${results.sum { it.failedTestCount }}" +
+            ", Errors: ${results.sum { it.exceptions.size() }}" +
+            ", Skipped: ${results.sum { it.skippedTestCount }}"
+    }
+}
+
+jacocoTestReport {
+    dependsOn test // tests are required to run before generating the report
+}
